@@ -39,6 +39,7 @@ else explains, and does not bind.
 | Workflow audit       | Zizmor, `auditor` persona, zero findings (§4.5)   |
 | PR title             | Must equal commit subject (single commit)         |
 | Copilot review       | `gh copilot-review --wait`; cap 10 rounds (§11.4) |
+| PR finished          | Clean Copilot review of the head commit (§11.5)   |
 | Approving/merging    | Never self-approve or merge (§10.4)               |
 | Stale PR branch      | "Update branch", never force push (§10.4)         |
 | Summary ending       | Change/PR URLs, one per line                      |
@@ -59,7 +60,7 @@ else explains, and does not bind.
 7. If hooks fail, fix and retry; never reset (§7.3).
 8. Push and open the PR with a matching title, or on an existing PR set
    the title first and then push (§10.1). Run Copilot review cycles
-   (§11).
+   (§11) until the review is clean or the PR is handed back (§11.5).
 9. End the summary with the change URLs (§10.3).
 
 ## 3. Applicability and Precedence
@@ -510,7 +511,9 @@ behaviour.
 
 When a development round finishes, the **final lines** of the summary
 MUST be the relevant change or PR URLs, one per line. Omit them once
-the changes are merged and closed.
+the changes are merged and closed. A summary MUST state each PR's
+review state truthfully: clean, pending, needing another round, or
+handed back (§11.5). Only a clean PR is described as ready.
 
 ### 10.4 Reviews and merging
 
@@ -528,12 +531,17 @@ push dismisses them, costing another review round.
 
 Not applicable to Gerrit-backed repositories (§3). Copilot reviews
 trigger automatically on every push; request one manually (§11.4) only
-when a push produced none. Where both `origin` and
-`upstream` exist, `origin` is usually a fork holding the branch and
-`upstream` is where the PR is raised.
+when a push produced none. **A push is not the end of the work**:
+after every push, wait for the review of that push and read it. Where
+both `origin` and `upstream` exist, `origin` is usually a fork holding
+the branch and `upstream` is where the PR is raised.
 
-Repeat until a review returns **no new comments and no suppressed
-findings**, or the round cap in §11.4 is reached:
+The organisation ruleset requires every review thread to be resolved
+before a PR can merge, and Copilot reviews every push. An unanswered
+Copilot finding therefore blocks the merge, and a PR whose review
+nobody addresses cannot land without a human doing the agent's work.
+
+Repeat until the review is clean or the PR is handed back (§11.5):
 
 1. Raise or update the PR and request a Copilot review (§11.4).
 2. Wait for the review, then read all of it: inline comments and the
@@ -543,7 +551,8 @@ findings**, or the round cap in §11.4 is reached:
 4. Create or amend the commit (§11.3).
 5. Re-run the local gates: `prek`, the aislop gate (§9.1), the tests.
 6. Push (§11.3).
-7. Reply to each feedback item, then resolve it (§11.1, §11.2).
+7. Reply to each feedback item (§11.1). Resolve the ones fixed or
+   accepted (§11.2); leave a disputed one open for a human (§11.5).
 8. Confirm the "Semantic Pull Request" check still passes (§10.1).
 
 ### 11.1 Commenting rules
@@ -627,6 +636,55 @@ agents MUST stop and hand back to the contributor, reporting how many
 rounds ran, which findings remain unresolved and why each was not
 applied (disputed, out of scope, or needing a human decision), and the
 state of the required checks.
+
+### 11.5 When a PR is finished
+
+A PR is finished only when a Copilot review of its **current head
+commit** is clean. The review's `commit_id` MUST equal the head; a
+review of an earlier push does not count. Clean means all three of:
+
+- no unresolved review threads;
+- no suppressed findings in the review overview (§11.1);
+- an overview assessment of `🟢 Approval recommended` (`🟢 Ready to
+  approve` in older reviews) or `🔵 Needs a closer look`. The blue
+  assessment flags a change for a human's attention rather than a
+  defect, and is common on a larger PR; it counts as clean only with
+  the first two conditions met. `🟡 Changes recommended` always means
+  more work.
+
+Until then an agent MUST NOT report the PR as ready or finished. A
+wait that times out or is interrupted leaves the review **pending**,
+never passed. A finding the agent disputes is reported as an open
+disagreement. An inline finding gets a reply on its thread explaining
+why and stays unresolved for a human. A suppressed finding has no
+thread (§11.1), so the agent records it and the reason in the commit
+body or PR description instead.
+
+An agent hands a PR that is not clean to a human in two cases: the
+round cap in §11.4 is reached, or every remaining finding is disputed.
+It then reports the PR as **handed back**, with the findings that stand
+and why, and never as ready or finished.
+
+### 11.6 Automated pipelines
+
+§3 binds an automated pipeline exactly as it binds an interactive
+agent: a workflow that runs an agent and publishes its work as a PR,
+whatever splits the work between the agent session and the jobs
+around it. Such a pipeline MUST:
+
+- run the §11 cycle itself, in its own jobs if the agent session
+  ends before the review exists: wait for the review of each push,
+  give an agent the findings, push the fixes to the **same** PR,
+  reply to each thread and resolve those fixed or accepted, and repeat
+  until the review is clean or the PR is handed back (§11.5);
+- never instruct its agent to skip §11, and never tell it that
+  something else handles review unless a job in that pipeline does;
+- report a PR whose review has findings as needing another round, or
+  as handed back in either case §11.5 names; never as complete.
+
+A pipeline that cannot yet revise its own PRs MUST say so in each PR
+it opens and in its report. Until §11.5 holds for such a PR, the
+pipeline MUST NOT present it as ready.
 
 ## 12. The Repository Stub
 
