@@ -2,14 +2,15 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: 2026 The Linux Foundation
 
-# Shared organisation repository discovery for the SARIF publishers.
+# Shared organisation repository discovery.
 #
-# Called (workflow_call) by zizmor-sarif-publish.yaml and
-# aislop-sarif-publish.yaml so both scanners resolve the same
-# repository selection from a single implementation. Applies the scope
-# policy in .github/scan-scope.json (per-organisation scan toggles
-# plus include/exclude globs) and any extra patterns supplied by the
-# caller, then emits a matrix of {repo, default_branch} objects.
+# Called (workflow_call) by zizmor-sarif-publish.yaml,
+# aislop-sarif-publish.yaml and allow-list-bump.yaml so every caller
+# resolves the same repository selection from a single
+# implementation. Applies the scope policy in .github/scan-scope.json
+# (per-organisation scan toggles plus include/exclude globs) and any
+# extra patterns supplied by the caller, then emits a matrix of
+# {repo, default_branch} objects.
 
 name: 'Repository Discovery 🔍'
 
@@ -41,7 +42,7 @@ on:
         default: ''
     secrets:
       token:
-        description: 'PAT able to list the organisation repositories'
+        description: 'Token able to list the organisation repositories'
         required: true
     outputs:
       matrix:
@@ -101,39 +102,70 @@ jobs:
         with:
           persist-credentials: false
 
+      # Split the list inputs (comma, space or newline separated) into
+      # one item per line. Named repositories are checked as bare names
+      # and kept once whatever their case, since a duplicate would
+      # collide in the caller's matrix; every bad name is reported
+      # before the step fails, so a list with several typos needs one
+      # corrected re-run. Input holding only separators names nothing,
+      # so it scans everything, as blank does.
+      - name: 'Split named repositories'
+        id: 'only-repo'
+        # yamllint disable-line rule:line-length
+        uses: lfreleng-actions/list-splitter-action@b56a625474875d05ca8d1c1eb3314c29c526c9a6  # v0.1.0
+        with:
+          list: '${{ inputs.only-repo }}'
+          validate: 'repository'
+
+      - name: 'Split extra include globs'
+        id: 'extra-include'
+        # yamllint disable-line rule:line-length
+        uses: lfreleng-actions/list-splitter-action@b56a625474875d05ca8d1c1eb3314c29c526c9a6  # v0.1.0
+        with:
+          list: '${{ inputs.extra-include }}'
+
+      - name: 'Split extra exclude globs'
+        id: 'extra-exclude'
+        # yamllint disable-line rule:line-length
+        uses: lfreleng-actions/list-splitter-action@b56a625474875d05ca8d1c1eb3314c29c526c9a6  # v0.1.0
+        with:
+          list: '${{ inputs.extra-exclude }}'
+
       - name: 'Build in-scope repository matrix'
         id: 'list'
         shell: bash
         env:
           GH_TOKEN: '${{ secrets.token }}'
           ORG: '${{ inputs.org }}'
-          ONLY_REPO: '${{ inputs.only-repo }}'
-          EXTRA_INCLUDE: '${{ inputs.extra-include }}'
-          EXTRA_EXCLUDE: '${{ inputs.extra-exclude }}'
+          ONLY_REPO: '${{ steps.only-repo.outputs.lines }}'
+          EXTRA_INCLUDE: '${{ steps.extra-include.outputs.lines }}'
+          EXTRA_EXCLUDE: '${{ steps.extra-exclude.outputs.lines }}'
         run: |
           # Build in-scope repository matrix
           set -euo pipefail
           echo "Target organisation: ${ORG}"
 
           # Fail fast on a missing token rather than emitting an opaque auth
-          # error on the first API call. The default GITHUB_TOKEN cannot
-          # write code-scanning results to other repositories, so the
-          # calling workflow must pass a dedicated PAT.
+          # error on the first API call. A blank value usually means the
+          # caller passed a secret that is not set. Any token that can
+          # list the organisation's repositories will do: the ephemeral
+          # GITHUB_TOKEN covers public ones, while a private repository
+          # in scope needs a credential that can see it.
           if [ -z "${GH_TOKEN}" ]; then
-            msg="No token available: the calling workflow must pass a"
-            msg="${msg} PAT via the 'token' secret"
+            msg="No token available: the calling workflow must pass one"
+            msg="${msg} via the 'token' secret (is that secret set?)"
             echo "::error::${msg}" >&2
             exit 1
           fi
 
-          # Scope policy is data-driven and SHARED between the SARIF
-          # publishers: every caller reads .github/scan-scope.json
-          # (keyed by organisation) so all scanners cover the same
+          # Scope policy is data-driven and SHARED between the
+          # callers: every caller reads .github/scan-scope.json
+          # (keyed by organisation) so all of them cover the same
           # repository selection. Per organisation it provides four
           # boolean scan toggles plus include and exclude glob lists;
           # the caller-supplied extra-include / extra-exclude inputs
-          # add patterns at run time (comma, space, or newline
-          # separated). Patterns are case-insensitive globs (*, ?, and
+          # add patterns at run time (split one per line by the steps
+          # above). Patterns are case-insensitive globs (*, ?, and
           # [..] classes) matched against the repository name: when any
           # include pattern is present a repository must match one to
           # be in scope, and any matching exclude pattern removes it.
@@ -156,21 +188,15 @@ jobs:
             '.organisations[$o].include // [] | .[]' "${config}")
           mapfile -t exc_json < <(jq -r --arg o "${ORG}" \
             '.organisations[$o].exclude // [] | .[]' "${config}")
-          split_patterns() {
-            printf '%s' "$1" | tr ',' '\n' | tr -s '[:blank:]' '\n' \
-              | sed '/^$/d'
-          }
-          mapfile -t inc_var < <(split_patterns "${EXTRA_INCLUDE}")
-          mapfile -t exc_var < <(split_patterns "${EXTRA_EXCLUDE}")
+          # printf rather than a here-string: an empty list must give
+          # an empty array, not one holding a blank item.
+          mapfile -t inc_var < <(printf '%s' "${EXTRA_INCLUDE}")
+          mapfile -t exc_var < <(printf '%s' "${EXTRA_EXCLUDE}")
           includes=("${inc_json[@]}" "${inc_var[@]}")
           excludes=("${exc_json[@]}" "${exc_var[@]}")
-          # Named repositories for a manual run, split like the patterns.
-          # A name repeated in any case is kept once, since a duplicate
-          # would collide in the caller's matrix. Input holding only
-          # separators names nothing, so it scans everything, as blank
-          # does.
-          mapfile -t only_repos < <(split_patterns "${ONLY_REPO}" \
-            | awk '!seen[tolower($0)]++')
+          # Named repositories for a manual run, already validated and
+          # deduplicated by the split step.
+          mapfile -t only_repos < <(printf '%s' "${ONLY_REPO}")
 
           # Case-insensitive glob match of a name against any pattern.
           shopt -s nocasematch
@@ -191,21 +217,12 @@ jobs:
           if [ "${#only_repos[@]}" -gt 0 ]; then
             # Manual run against named repositories: fetch each one,
             # emitting the same one-object-per-line stream as the
-            # organisation listing. Every bad name is reported before
-            # failing, so a list with several typos needs only one
-            # corrected re-run.
+            # organisation listing. Every missing repository is
+            # reported before failing, so a list with several typos
+            # needs only one corrected re-run.
             repos_json=''
             lookup_failed=0
             for repo in "${only_repos[@]}"; do
-              case "${repo}" in
-                . | .. | *[!A-Za-z0-9._-]*)
-                  msg="Invalid repository name '${repo}': give the"
-                  msg="${msg} name only, without the organisation"
-                  echo "::error::${msg}" >&2
-                  lookup_failed=1
-                  continue
-                  ;;
-              esac
               if ! repo_json="$(gh api "/repos/${ORG}/${repo}" \
                 --jq '{repo: .name, default_branch: .default_branch,
                        archived: .archived, fork: .fork,
