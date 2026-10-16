@@ -53,15 +53,17 @@ uses the first file that exists:
 ## File format
 
 One `host[:port]` entry per line, sorted alphabetically (`LC_ALL=C`). A
-`*.host` entry matches a single label. A `#` introduces a comment,
-either as a full-line comment or trailing on an entry; the parser skips
-blank lines.
+`#` introduces a comment, either as a full-line comment or trailing on
+an entry; the parser skips blank lines.
 
-A probe under `egress-policy: block` confirmed the matching rule, since
-upstream documents neither case: `*.ubuntu.com` admitted
-`archive.ubuntu.com` but blocked both `azure.archive.ubuntu.com` and
-the bare apex `ubuntu.com`. Any host two or more labels below the apex
-needs its own entry alongside the wildcard, and so does an apex host.
+A `*.host` wildcard matches every name below `host`, at any depth, but
+not the bare apex, and it opens the first port listed for it and no
+other. An explicit entry overrides any wildcard for its host and opens
+its own ports alone. So a host reached on a second port, such as an apt
+mirror over plain HTTP, needs explicit entries for every port it uses. The
+[repository README](../../README.md#how-entries-match) gives the
+evidence; the [probe workflow](../workflows/allow-list-probe.yaml)
+checks these rules on amd64 and arm64.
 
 Record why each entry is present in a `# comment` directly above it:
 the service, and the tool, action or task that reaches it. The

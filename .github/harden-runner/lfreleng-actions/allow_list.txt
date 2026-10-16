@@ -12,12 +12,23 @@
 # obvious, add a '# comment' directly above it explaining why it's
 # there.
 #
-# A '*.host' entry matches exactly ONE label. Verified by probe
-# under 'egress-policy: block', because upstream documents neither
-# case: '*.ubuntu.com' admitted 'archive.ubuntu.com' but blocked
-# both 'azure.archive.ubuntu.com' and the bare apex 'ubuntu.com'.
-# So any host two or more labels below the apex needs its own
-# entry alongside the wildcard, and so does an apex host.
+# How harden-runner's agent (step-security/agent, the same code on
+# amd64 and arm64) matches entries; upstream documents none of it:
+#
+#   - A '*.host' wildcard matches every name ending in '.host', at
+#     any depth: '*.ubuntu.com' covers 'azure.archive.ubuntu.com'.
+#     It does not cover the bare apex 'host', which needs its own
+#     entry.
+#   - A wildcard opens ONE port: the first listed for that pattern,
+#     which in this sorted file is ':443'. A second entry such as
+#     '*.host:80' has no effect, so do not add one.
+#   - An explicit 'host:port' entry takes precedence over any
+#     wildcard for that host, and opens only its own ports. A host
+#     reached on two ports needs both listed explicitly; listing one
+#     takes the other away.
+#
+# The allow-list probe workflow (allow-list-probe.yaml) verifies all
+# three under 'egress-policy: block' on amd64 and arm64.
 #
 # Distribution package mirrors are a known gap. Fedora, EPEL,
 # CentOS Stream, Rocky, AlmaLinux, openSUSE and Arch all ship
@@ -82,12 +93,11 @@
 *.codecov.io:443
 
 # Debian package archives over apt (deb, security, ftp, snapshot);
-# container/base-image builds. Wildcarded, and on both ports,
-# because apt fails over between mirrors and Debian serves the
-# archive over plain HTTP as well as HTTPS -- package signatures,
-# not TLS, provide the integrity guarantee.
+# container/base-image builds, over HTTPS. Plain HTTP, which Debian's
+# images use (package signatures, not TLS, provide the integrity
+# guarantee), needs the explicit deb.debian.org entries: a wildcard
+# opens one port.
 *.debian.org:443
-*.debian.org:80
 
 # Fedora and EPEL metalink endpoint (mirrors) plus the vendor's
 # own master mirror (dl) and build artifacts (kojipkgs); all
@@ -106,10 +116,10 @@
 # Sentry event ingest, regional: the Codecov CLI reports its own
 # errors to Sentry (observed: o<org-id>.ingest.us.sentry.io). The
 # leading label is Codecov's Sentry organisation ID, which may
-# change, and a wildcard matches one label only, so each region's
-# ingest zone needs its own entry. 'de' is Sentry's EU (Frankfurt)
-# region; not yet observed, listed so a move there cannot break
-# coverage uploads.
+# change, so each region's ingest zone is wildcarded; '*.sentry.io'
+# would cover both but admit the rest of Sentry too. 'de' is Sentry's
+# EU (Frankfurt) region; not yet observed, listed so a move there
+# cannot break coverage uploads.
 *.ingest.de.sentry.io:443
 *.ingest.us.sentry.io:443
 
@@ -149,15 +159,11 @@
 # Ubuntu archives and runner-OS services over apt, dirmngr and
 # update-motd: archive, security, ports, esm, changelogs, motd,
 # snapshot and keyserver (the last also reached by the Sonar
-# scanner via sonarqube-cloud-scan-action).
-# Wildcarded on both ports because apt fails over between the
-# mirrors in the runner's /etc/apt/apt-mirrors.txt -- the Azure
-# mirror over HTTP first, then archive.ubuntu.com and
-# security.ubuntu.com over HTTPS. Pinning individual hosts breaks
-# package installs (e.g. graphviz for docs jobs) whenever the
-# primary mirror is unreachable.
+# scanner via sonarqube-cloud-scan-action), over HTTPS. apt fails
+# over between the mirrors in the runner's /etc/apt/apt-mirrors.txt,
+# and Ubuntu's images use plain HTTP; a wildcard opens one port, so
+# each host apt reaches over HTTP has explicit entries below.
 *.ubuntu.com:443
-*.ubuntu.com:80
 
 # SonarQube analysis sensor cache (AWS S3); reached by the Sonar
 # scanner via sonarqube-cloud-scan-action. Both endpoint forms are
@@ -193,6 +199,13 @@ api.scorecard.dev:443
 # 1Password (AgileBits) app-update check (1Password CLI secret fetch).
 app-updates.agilebits.com:443
 
+# Ubuntu package archive (amd64) over apt, on both ports: the amd64
+# runner's HTTPS failover mirror, and the plain-HTTP archive in
+# Ubuntu's container images. '*.ubuntu.com' opens 443 alone, and an
+# explicit entry overrides it, so both ports are listed.
+archive.ubuntu.com:443
+archive.ubuntu.com:80
+
 # Astral (uv) site: uv installer bootstrap used by the Python actions
 # (e.g. gerrit-clone-action, python-sbom-action).
 astral.sh:443
@@ -203,11 +216,11 @@ aswf.jfrog.io:443
 # Docker Hub registry auth, used by docker buildx/build-push and helm.
 auth.docker.io:443
 
-# Ubuntu package archive over apt; the priority-1 mirror in the
+# Ubuntu package archive over apt; the priority-1 mirror in the amd64
 # runner's /etc/apt/apt-mirrors.txt (go-httpbin-action,
-# python-build-action). Required in its own right: it sits two
-# labels below the apex, which '*.ubuntu.com' does not match, so
-# removing this line reintroduces the apt failover breakage.
+# python-build-action). Reached over plain HTTP, which
+# '*.ubuntu.com' does not open, and it serves no HTTPS; removing this
+# line reintroduces the apt failover breakage.
 azure.archive.ubuntu.com:80
 
 # SonarSource scanner binary download; sonarqube-cloud-scan-action.
@@ -232,6 +245,13 @@ cdn.azul.com:443
 # exchanges a GitHub OIDC token here for a Trusted Publishing token
 # (rust-crate-publish-action). An apex host, so no wildcard covers it.
 crates.io:443
+
+# Debian package archive over apt, on both ports: Debian's container
+# images use plain HTTP, and HTTPS is the alternative. '*.debian.org'
+# opens 443 alone, and an explicit entry overrides it, so both ports
+# are listed.
+deb.debian.org:443
+deb.debian.org:80
 
 # Google download server, fetched by go-httpbin-action and
 # python-build-action.
@@ -482,10 +502,10 @@ logs.onap.org:443
 logs.opendaylight.org:443
 
 # Maven Central's Google Cloud Storage download host, which Central
-# redirects artifact fetches to. Needed in its own right: it sits two
-# labels below 'googleapis.com', so no single-label wildcard reaches
-# it, and 'storage.googleapis.com' is a different host. Observed in
-# ONAP cps Maven builds; candidate for a dedicated ONAP list.
+# redirects artifact fetches to. Listed by name because a wildcard
+# over 'googleapis.com' would admit every Google API and storage
+# bucket, and 'storage.googleapis.com' is a different host. Observed
+# in ONAP cps Maven builds; candidate for a dedicated ONAP list.
 maven-central.storage-download.googleapis.com:443
 
 # CentOS Stream canonical content host; serves directly with no
@@ -583,6 +603,14 @@ plugins-artifacts.gradle.org:443
 # (gradle-build-action / Gradle plugin resolution).
 plugins.gradle.org:443
 
+# Ubuntu ports archive (arm64 and other non-x86 architectures) over
+# apt, on both ports: the plain-HTTP mirror of the arm64 runners and
+# of Ubuntu's arm64 container images, and its HTTPS alternative.
+# '*.ubuntu.com' opens 443 alone, and an explicit entry overrides it,
+# so both ports are listed.
+ports.ubuntu.com:443
+ports.ubuntu.com:80
+
 # StepSecurity harden-runner control-plane API (agent policy and
 # telemetry). Not observed in the audit data; required by the
 # harden-runner agent itself.
@@ -644,6 +672,13 @@ repository.hazelcast.com:443
 
 # Build log storage (FD.io); S3-backed job logs.
 s3-logs.fd.io:443
+
+# Ubuntu security archive (amd64) over apt, on both ports: the amd64
+# runner's HTTPS failover mirror, and the plain-HTTP security pocket
+# in Ubuntu's container images. '*.ubuntu.com' opens 443 alone, and
+# an explicit entry overrides it, so both ports are listed.
+security.ubuntu.com:443
+security.ubuntu.com:80
 
 # Gradle distribution and wrapper checksums (Gradle Wrapper,
 # gradle/actions/setup-gradle). Distribution downloads 307-redirect

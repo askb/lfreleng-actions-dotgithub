@@ -159,32 +159,50 @@ loaded at runtime by
 The [directory README](.github/harden-runner/README.md) covers the file
 format and layout.
 
-#### Wildcard matching covers one label
+#### How entries match
 
-A `*.host` entry matches a single label. It does not match a nested
-subdomain, and it does not match the bare apex. harden-runner documents
-neither case, so a controlled probe under `egress-policy: block`
-established the behaviour. A policy carrying `*.ubuntu.com` and no
-other `ubuntu.com` entry gave:
+harden-runner documents none of this. It comes from the source of its
+agent, [`step-security/agent`](https://github.com/step-security/agent)
+(`matchWildcardDomain` and `matchAnyWildcard` in `dnsproxy.go`,
+`parseEndpoints` in `config.go`), which is the same code on amd64 and
+arm64. The
+[allow-list probe workflow](.github/workflows/allow-list-probe.yaml)
+checks it on both architectures under `egress-policy: block`:
 
-| Target | Labels below apex | Result |
-| --- | --- | --- |
-| `archive.ubuntu.com` | 1 | allowed |
-| `azure.archive.ubuntu.com` | 2 | **blocked** |
-| `ubuntu.com` | 0 (apex) | **blocked** |
+<!-- markdownlint-disable MD013 -->
 
-A second run adding `azure.archive.ubuntu.com` explicitly admitted that
-host moments later, so a mirror outage does not account for the
-difference. Note that `egress-policy: audit` cannot answer this
-question, because audit mode never enforces `allowed-endpoints`.
+| Rule                                                                                 | Example                                                    |
+| ------------------------------------------------------------------------------------ | ---------------------------------------------------------- |
+| A `*.host` wildcard matches any name ending in `.host`, at any depth                 | `*.ubuntu.com` covers `azure.archive.ubuntu.com`           |
+| A wildcard does not match its bare apex                                              | `sonarcloud.io:443` sits beside `*.sonarcloud.io:443`      |
+| A wildcard opens **one** port: the first listed for that pattern                     | `*.ubuntu.com:443` then `*.ubuntu.com:80` opens 443 alone  |
+| An explicit entry overrides any wildcard for its host, and opens its own ports alone | `archive.ubuntu.com:80` alone would close 443 to that host |
+
+<!-- markdownlint-enable MD013 -->
+
+The agent resolves a wildcard-matched name when a job looks it up, then
+opens its address on the wildcard's first port. This sorted file puts
+`:443` first, so a `*.host:80` line never takes effect: a host reached
+over plain HTTP, as apt reaches its mirrors, needs explicit entries for
+every port it uses. Note that `egress-policy: audit` cannot show any of
+this, because audit mode never enforces `allowed-endpoints`.
+
+An August 2026 probe read the third rule as a label limit:
+`*.ubuntu.com` admitted `archive.ubuntu.com` over HTTPS but refused
+`azure.archive.ubuntu.com`, which apt reaches over HTTP. The same rule
+later broke every arm64 job that installed packages, once
+harden-runner v2.22.0 began enforcing block mode on arm64: the arm64
+runners' mirror, `ports.ubuntu.com`, resolved through `*.ubuntu.com`,
+and its port 80 stayed closed.
 
 Two consequences when editing the allow-list:
 
-- A host two or more labels below its apex needs its own entry
-  **alongside** the wildcard. Deleting such an entry as "redundant"
-  breaks the workflows that reach it.
-- An apex host needs its own entry as well, which is why
-  `sonarcloud.io:443` sits beside `*.sonarcloud.io:443`.
+- Name a host explicitly, with every port it needs, when a workflow
+  reaches it on any port other than its wildcard's first. Deleting such
+  an entry as "redundant" breaks the workflows that reach it.
+- Choose wildcards with their reach in mind: one admits every host
+  below it, so `*.blob.core.windows.net` would admit any Azure storage
+  account, anyone's included.
 
 #### Distribution package mirrors
 
