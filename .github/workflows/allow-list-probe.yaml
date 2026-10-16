@@ -1,0 +1,221 @@
+---
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 The Linux Foundation
+
+# Probe of how harden-runner enforces the egress allow-list.
+#
+# harden-runner documents none of its matching rules, and they decide
+# what an allow-list entry admits. Read from the source of its agent
+# (step-security/agent: matchWildcardDomain, matchAnyWildcard and
+# parseEndpoints), they are:
+#
+#   1. a '*.host' wildcard matches every name ending in '.host', at
+#      any depth, but not the bare apex 'host';
+#   2. a wildcard opens ONE port, the first listed for its pattern;
+#   3. an explicit entry overrides any wildcard for its host, and
+#      opens only its own ports.
+#
+# The 'rules' jobs prove each rule under 'egress-policy: block' with a
+# synthetic policy, in both port orders, on amd64 and arm64: harden-
+# runner v2.22.0 began enforcing block mode on arm64, where it had
+# installed no agent at all. A name the agent refuses resolves to its
+# sinkhole address; a port it has not opened refuses the connection.
+#
+# The 'shared-list' jobs then run this change's allow_list.txt under
+# block mode on both architectures, check the agent is enforcing it
+# (harden-runner fails open when an entry does not resolve), and
+# update apt's package indexes on the runner and in Ubuntu and Debian
+# containers, which reach their mirrors over plain HTTP. Rule 2 broke
+# exactly that on arm64.
+#
+# Audit mode cannot answer any of this, since it never enforces
+# allowed-endpoints.
+
+name: 'Allow-List Probe 🧭'
+
+# yamllint disable-line rule:truthy
+on:
+  pull_request:
+    paths:
+      - '.github/harden-runner/**'
+      - '.github/workflows/allow-list-probe.yaml'
+  push:
+    branches: ['main']
+    paths:
+      - '.github/harden-runner/**'
+      - '.github/workflows/allow-list-probe.yaml'
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: '${{ github.workflow }}-${{ github.ref }}'
+  cancel-in-progress: true
+
+env:
+  # The agent answers a refused name with this address
+  # (StepSecuritySinkHoleIPAddress in step-security/agent dnsproxy.go).
+  SINKHOLE: '54.185.253.63'
+
+jobs:
+  rules:
+    name: 'Matching rules (${{ matrix.runner }}, ${{ matrix.order }})'
+    runs-on: '${{ matrix.runner }}'
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: ['ubuntu-24.04', 'ubuntu-24.04-arm']
+        order: ['443-first', '80-first']
+        include:
+          - order: '443-first'
+            ubuntu: '*.ubuntu.com:443 *.ubuntu.com:80'
+          - order: '80-first'
+            ubuntu: '*.ubuntu.com:80 *.ubuntu.com:443'
+    steps:
+      # Test hosts with disjoint addresses, since the agent opens
+      # address:port pairs: ports.ubuntu.com (Canonical),
+      # azure.archive.ubuntu.com (Azure) and deb.debian.org (Fastly).
+      - name: 'Harden runner (block, synthetic policy)'
+        # yamllint disable-line rule:line-length
+        uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25  # v2.22.1
+        with:
+          egress-policy: 'block'
+          allowed-endpoints: >
+            *.debian.org:443
+            ${{ matrix.ubuntu }}
+            deb.debian.org:80
+
+      - name: 'Probe the matching rules'
+        shell: bash
+        env:
+          ORDER: '${{ matrix.order }}'
+        run: |
+          # Probe the matching rules
+          set -uo pipefail
+          failures=0
+          address() { getent ahostsv4 "$1" | awk 'NR == 1 { print $1 }'; }
+          connects() {
+            timeout 10 bash -c ": > /dev/tcp/$1/$2" 2> /dev/null
+          }
+          expect() {  # expect <what> <want> <got>
+            if [ "$2" = "$3" ]; then
+              echo "✅ ${1}: ${3}"
+            else
+              echo "::error::${1}: expected ${2}, got ${3}"
+              failures=$((failures + 1))
+            fi
+          }
+          dns() {
+            local ip
+            ip="$(address "$1")"
+            if [ -z "${ip}" ]; then echo 'unresolved'
+            elif [ "${ip}" = "${SINKHOLE}" ]; then echo 'refused'
+            else echo 'resolved'; fi
+          }
+          tcp() {
+            if connects "$1" "$2"; then echo 'open'; else echo 'closed'; fi
+          }
+
+          # Rule 1: any depth below the wildcard, never the apex.
+          expect 'DNS azure.archive.ubuntu.com (two labels deep)' \
+            resolved "$(dns azure.archive.ubuntu.com)"
+          expect 'DNS ubuntu.com (apex)' refused "$(dns ubuntu.com)"
+
+          # Rule 2: the wildcard's first port alone.
+          if [ "${ORDER}" = '443-first' ]; then
+            open=443 shut=80
+          else
+            open=80 shut=443
+          fi
+          expect "TCP ports.ubuntu.com:${open} (first port)" \
+            open "$(tcp ports.ubuntu.com "${open}")"
+          expect "TCP ports.ubuntu.com:${shut} (second port)" \
+            closed "$(tcp ports.ubuntu.com "${shut}")"
+          # The August 2026 probe's case: a nested host over HTTP.
+          if [ "${open}" = 80 ]; then want=open; else want=closed; fi
+          expect 'TCP azure.archive.ubuntu.com:80 (via the wildcard)' \
+            "${want}" "$(tcp azure.archive.ubuntu.com 80)"
+
+          # Rule 3: the explicit entry overrides *.debian.org:443.
+          expect 'TCP deb.debian.org:80 (explicit port)' \
+            open "$(tcp deb.debian.org 80)"
+          expect 'TCP deb.debian.org:443 (wildcard port, overridden)' \
+            closed "$(tcp deb.debian.org 443)"
+
+          if [ "${failures}" -ne 0 ]; then
+            echo "::error::${failures} matching rule(s) did not hold"
+            exit 1
+          fi
+          echo "All matching rules held on ${RUNNER_ARCH} ✅"
+
+  shared-list:
+    name: 'Shared allow-list (${{ matrix.runner }})'
+    runs-on: '${{ matrix.runner }}'
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: ['ubuntu-24.04', 'ubuntu-24.04-arm']
+    steps:
+      # This change's own list: a pull request's head, else this commit.
+      - name: 'Load the allow-list under test'
+        # yamllint disable-line rule:line-length
+        uses: lfreleng-actions/harden-runner-block-action@51ef68401547a8b648275129b9a21544612596d5  # v0.13.1
+        with:
+          # yamllint disable-line rule:line-length
+          config: '${{ github.repository_owner }}@${{ github.event.pull_request.head.sha || github.sha }}'
+
+      - name: 'Harden runner (block)'
+        # yamllint disable-line rule:line-length
+        uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25  # v2.22.1
+        with:
+          egress-policy: 'block'
+          allowed-endpoints: >
+            ${{ env.CONNECTION_ALLOW_LIST }}
+
+      # harden-runner reverts to no filtering at all when any explicit
+      # entry fails its startup lookup, and apt would then pass for the
+      # wrong reason; so first prove this job's agent is enforcing.
+      - name: 'Check block mode is enforced'
+        shell: bash
+        run: |
+          # Check block mode is enforced
+          set -euo pipefail
+          apex="$(getent ahostsv4 ubuntu.com | awk 'NR == 1 { print $1 }')"
+          if [ "${apex}" != "${SINKHOLE}" ]; then
+            echo "::error::ubuntu.com, absent from the list, resolved to" \
+              "'${apex}', not the sinkhole: block mode is not enforced"
+            exit 1
+          fi
+          echo "Block mode enforced: ubuntu.com refused ✅"
+
+      # --error-on=any fails on any index it could not fetch, where a
+      # plain update only warns and exits 0.
+      - name: 'Update apt indexes on the runner'
+        shell: bash
+        run: |
+          # Update apt indexes on the runner
+          sudo apt-get update --error-on=any
+
+      # yamllint disable rule:line-length
+      - name: 'Update apt indexes in Ubuntu and Debian containers'
+        shell: bash
+        run: |
+          # Update apt indexes in Ubuntu and Debian containers
+          set -euo pipefail
+          # Multi-architecture index digests: ubuntu:24.04 and
+          # debian:trixie-slim.
+          ubuntu='sha256:534baea6a22c03a63003dbc8dbe78fe34bc0d7e595d9a9dc9834884ff530eb55'
+          debian='sha256:a29215f6a35e51e22adffa17f89e9d2ef06214e64a2bad10d765c46aea49f11f'
+          for image in "ubuntu@${ubuntu}" "debian@${debian}"; do
+            echo "::group::${image%%@*}"
+            docker run --rm "${image}" apt-get update --error-on=any
+            echo '::endgroup::'
+          done
+          echo "Shared allow-list serves apt on ${RUNNER_ARCH} ✅"
+      # yamllint enable rule:line-length
