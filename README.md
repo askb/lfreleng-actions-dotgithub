@@ -787,7 +787,10 @@ repositories from every run.
   carries a `required_signatures` rule, which an unverified commit
   would fail.
 - A `dry-run` dispatch input reports what would change without opening
-  anything.
+  anything. It needs no bot credential: the credential check warns
+  about a missing one instead of failing the run, the sweep mints no
+  token, and the reads the step still makes go through the ephemeral
+  token.
 - The workflow pins the linter version in `LINTER_VERSION`, matching the
   commit-pinned actions around it. An unpinned install would let one bad
   release reach every repository in the sweep at once. Bump it when the

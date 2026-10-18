@@ -79,7 +79,8 @@ on:
         required: false
         default: ''
       dry-run:
-        description: 'Report what would change without opening pull requests'
+        # yamllint disable-line rule:line-length
+        description: 'Report what would change without opening pull requests; needs no bot credential'
         required: false
         type: boolean
         default: false
@@ -170,11 +171,17 @@ jobs:
           CLIENT_ID: '${{ vars.LF_RELENG_BOT_CLIENT_ID }}'
           # yamllint disable-line rule:line-length
           KEY_PRESENT: "${{ secrets.LF_RELENG_BOT_PRIVATE_KEY != '' }}"
+          DRY_RUN: '${{ inputs.dry-run }}'
         run: |
           # Check bot credentials
           # Name the missing piece. The previous incarnation of this
           # sweep failed every week on an unprovisioned credential, and
           # said only that a token was unavailable several steps later.
+          #
+          # A dry run writes nothing and so needs no credential: it
+          # still names the gap, so an operator rehearsing the sweep
+          # learns the live run would stop here, but it carries on and
+          # exercises the clone, the linter and the digest regardless.
           set -euo pipefail
           missing=''
           if [ -z "${CLIENT_ID}" ]; then
@@ -188,8 +195,12 @@ jobs:
             msg="The allow-list sweep needs the LF RelEng bot App"
             msg="${msg} credentials: ${missing} is not set for the"
             msg="${msg} 'production' environment"
-            echo "::error::${msg}" >&2
-            exit 1
+            if [ "${DRY_RUN}" = 'true' ]; then
+              echo "::warning::${msg}; a dry run proceeds without them"
+            else
+              echo "::error::${msg}" >&2
+              exit 1
+            fi
           fi
 
       # Pull requests come from the organisation's bot so that a
@@ -198,6 +209,7 @@ jobs:
       # ephemeral GITHUB_TOKEN deliberately suppresses.
       - name: 'Mint bot token'
         id: 'token'
+        if: "!inputs.dry-run"
         # yamllint disable-line rule:line-length
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
         with:
@@ -219,6 +231,7 @@ jobs:
 
       - name: 'Resolve bot identity'
         id: 'identity'
+        if: "!inputs.dry-run"
         shell: bash
         env:
           # A public user lookup, so the ephemeral token serves. Keeping
@@ -364,7 +377,12 @@ jobs:
         id: 'sweep'
         shell: bash
         env:
-          GH_TOKEN: '${{ steps.token.outputs.token }}'
+          # A dry run mints no bot token and only reads: open pull
+          # requests, branch tips and changed files, all on public
+          # repositories, which the ephemeral token can see. Every write
+          # below is guarded by DRY_RUN, so the fallback never reaches
+          # one.
+          GH_TOKEN: '${{ steps.token.outputs.token || secrets.GITHUB_TOKEN }}'
           ORG: '${{ needs.discover.outputs.org }}'
           BRANCH: '${{ env.BRANCH }}'
           AUTHOR: '${{ steps.identity.outputs.author }}'
