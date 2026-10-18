@@ -24,14 +24,21 @@
 # One sweep rather than a job per repository: a single hardened runner,
 # one toolchain install and one linter process cover the whole family,
 # and the Slack digest is assembled in the job that produced it rather
-# than passed between matrix jobs as artefacts.
+# than passed between matrix jobs as artefacts. A multi-repository run
+# also shares one resolution cache, so the family costs one lookup of
+# the allow-list host rather than one per repository.
 #
-# Not, however, for the reason a reader might expect. A multi-repository
-# run does share one resolution cache, but every repository in scope
-# sets a Dependabot cooldown, and the linter bypasses that cache
-# whenever a cooldown applies, since a cached answer would then depend
-# on a policy the cache does not record. Each repository still resolves
-# the allow-list host for itself.
+# No cooldown applies to these pins. Every repository in scope sets a
+# seven-day Dependabot cooldown, which the linter would otherwise
+# honour, and the pins would then lag the newest release by up to a
+# week. The allow-list is different from an action: it mostly grows,
+# an addition grants an endpoint and takes nothing away, and every
+# change is reviewed and probed under block mode in the .github
+# repository before it is tagged. Holding a release back serves
+# nothing here, and has held back the fix for a broken build. The
+# sweep passes --cooldown 0, so each run targets the newest release
+# that exists. Only allow-list pins are rewritten (--action-calls
+# report), so the override governs nothing else.
 #
 # Scope is the *-workflows family: those host the reusable build
 # workflows consumers actually run, where a missing endpoint breaks real
@@ -312,6 +319,11 @@ jobs:
           # them makes the pull request harder to review and harder to
           # revert.
           #
+          # --cooldown 0 targets the newest release regardless of each
+          # repository's Dependabot cooldown; the note at the top of
+          # this file says why. It also keeps the linter's resolution
+          # cache in play, which a cooldown would bypass.
+          #
           # The document goes to a file rather than standard output, so
           # the job log keeps the linter's readable account of each
           # repository. The file lands beside the checkouts, not among
@@ -326,6 +338,7 @@ jobs:
             --multi-repo \
             --allow-list update \
             --action-calls report \
+            --cooldown 0 \
             --allow-list-org "${ORG}" \
             --json-output report.json || status=$?
           echo "Linter exited ${status}"
@@ -515,9 +528,8 @@ jobs:
               title="Chore: Bump harden-runner allow-list to ${version}"
               display="${version}"
               commit_origin="${host}"
-              body_target="to **${version}** of \`${host}\`, the newest"
-              body_target="${body_target} release eligible under this"
-              body_target="${body_target} repository's Dependabot cooldown"
+              body_target="to **${version}** of \`${host}\`, its newest"
+              body_target="${body_target} release"
             else
               title='Chore: Bump harden-runner allow-list pins'
               display=''
@@ -526,9 +538,7 @@ jobs:
               if [ "${hosts_count}" -gt 1 ]; then
                 display="${hosts_count} hosts"
                 commit_origin="${commit_origin} (${pairs})"
-                body_target="${body_target} that is eligible under this"
-                body_target="${body_target} repository's Dependabot"
-                body_target="${body_target} cooldown: ${pairs}"
+                body_target="${body_target}: ${pairs}"
                 echo "::warning::${repo} pins ${hosts_count} allow-list" \
                   "hosts (${pairs}); the pull request describes them all"
               fi

@@ -685,12 +685,9 @@ pull request.
 One sweep rather than a job per repository: a single hardened runner,
 one toolchain install and one linter process cover the whole family,
 and the job that produces the digest also sends it, rather than
-passing it between jobs as artefacts. A multi-repository run does
-share one resolution cache, but that is not what earns the
-arrangement here: every repository in scope sets a Dependabot
-cooldown, and the linter bypasses that cache whenever a cooldown
-applies, so each repository still resolves the allow-list host for
-itself.
+passing it between jobs as artefacts. A multi-repository run also
+shares one resolution cache, so the family costs one lookup of the
+allow-list host rather than one per repository.
 
 [linter]: https://github.com/lfreleng-actions/gha-workflow-linter
 
@@ -714,11 +711,19 @@ repositories from every run.
   Dependabot, and mixing them makes the change harder to review and
   harder to revert.
 - The pinned reference and its version comment change, and nothing
-  else: quoting style, spacing and comment position all survive. The
-  release the sweep moves to is the newest one eligible under the
-  repository's own Dependabot cooldown, which is not always the newest
-  released, and the pull request says so rather than calling it
-  current.
+  else: quoting style, spacing and comment position all survive.
+- Every pin moves to the newest release of its host, with no cooldown.
+  Each repository in the family sets a seven-day Dependabot cooldown
+  for its action calls, and the linter would apply it to these pins
+  too, so the sweep passes `--cooldown 0`. The allow-list grows far
+  more often than it shrinks, an addition grants an endpoint and takes
+  nothing away, and each change passes review and the block-mode
+  probe in this repository before anyone tags it, so holding a release
+  back for a week serves nothing and delays the fix for a broken
+  build. The sweep rewrites allow-list pins and nothing else, so the
+  override governs nothing else. Dropping the cooldown also lets the
+  linter keep its resolution cache across the sweep, which a cooldown
+  made it bypass.
 - The sweep leaves alone any pin carrying an `allow-list-pin-ok`
   directive.
 - Each repository carries at most one sweep pull request, on a fixed
