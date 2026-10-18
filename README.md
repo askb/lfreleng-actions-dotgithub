@@ -678,7 +678,7 @@ to the allow-list weeks earlier.
 
 Every Monday, `allow-list-bump.yaml` enumerates the in-scope
 repositories, clones them side by side, runs [`gha-workflow-linter`][linter]
-once across the whole set with `--multi-repo --update-allow-list`, and
+once across the whole set with `--multi-repo --allow-list update`, and
 opens a pull request wherever a pin moved. A Slack digest links every
 pull request.
 
@@ -709,9 +709,10 @@ repositories from every run.
 
 #### Behaviour
 
-- Runs with `--no-auto-fix`, so each pull request carries a diff
-  confined to allow-list pins. Action version bumps belong to Dependabot, and
-  mixing them makes the change harder to review and harder to revert.
+- Runs with `--action-calls report`, so each pull request carries a
+  diff confined to allow-list pins. Action version bumps belong to
+  Dependabot, and mixing them makes the change harder to review and
+  harder to revert.
 - The pinned reference and its version comment change, and nothing
   else: quoting style, spacing and comment position all survive. The
   release the sweep moves to is the newest one eligible under the

@@ -17,7 +17,7 @@
 #
 # Every Monday this enumerates the in-scope repositories, clones them
 # side by side, runs gha-workflow-linter once across the whole set with
-# --multi-repo --update-allow-list, and opens a pull request wherever a
+# --multi-repo --allow-list update, and opens a pull request wherever a
 # pin moved. A Slack digest links every pull request; a separate job
 # reports a failed run.
 #
@@ -108,7 +108,7 @@ env:
   # unpinned install would let one bad release reach every repository in
   # the sweep at once, raising pull requests from it. Bump when the
   # linter releases something this sweep needs.
-  LINTER_VERSION: '1.5.1'
+  LINTER_VERSION: '1.8.2'
 
 jobs:
   discover:
@@ -307,9 +307,15 @@ jobs:
           # repository. See the note at the top of this file for what
           # that does and does not save.
           #
-          # --no-auto-fix keeps the diff to allow-list pins alone: action
-          # version bumps are Dependabot's job, and mixing them makes the
-          # pull request harder to review and harder to revert.
+          # --action-calls report keeps the diff to allow-list pins
+          # alone: action version bumps are Dependabot's job, and mixing
+          # them makes the pull request harder to review and harder to
+          # revert.
+          #
+          # The document goes to a file rather than standard output, so
+          # the job log keeps the linter's readable account of each
+          # repository. The file lands beside the checkouts, not among
+          # them: the linter refuses to write inside the tree it reads.
           #
           # The linter exits 1 when it modifies files, which is the
           # signal we want rather than an error, so the status is
@@ -318,21 +324,22 @@ jobs:
           uvx --from "gha-workflow-linter==${LINTER_VERSION}" \
             gha-workflow-linter lint repos \
             --multi-repo \
-            --update-allow-list \
-            --no-auto-fix \
+            --allow-list update \
+            --action-calls report \
             --allow-list-org "${ORG}" \
-            --format json > report.json || status=$?
+            --json-output report.json || status=$?
           echo "Linter exited ${status}"
 
-          # The exit code cannot gate this step. --update-allow-list
+          # The exit code cannot gate this step. --allow-list update
           # makes an unresolved host exit 4, and the sweep's aggregate
           # code is the highest across every repository, so one host
           # that would not resolve would discard the fixes made for all
           # the others before any pull request was raised. The report is
           # the contract instead: insist it is well formed, act on what
           # succeeded, and fail once the rest is open. A run that died
-          # outright writes no parseable document, which the check below
-          # catches.
+          # outright writes no document at all, since the linter writes
+          # it once, after it has finished reading, which the check
+          # below catches.
 
           # Insist the report accounts for everything discovery found.
           # A rate-limited pre-flight can end the run before any document
