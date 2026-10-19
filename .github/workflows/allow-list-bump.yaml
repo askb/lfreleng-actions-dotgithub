@@ -288,7 +288,14 @@ jobs:
         # yamllint disable-line rule:line-length
         uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884  # v10.3.0
         with:
-          enable-cache: true
+          # No cache. The job checks out no repository, so the glob the
+          # action keys its cache on matches nothing and the entry
+          # would never invalidate; every run warned about that. The
+          # one install this job does, the pinned linter and its
+          # dependencies, takes seconds, and a cache that nothing ever
+          # refreshes is one more thing a poisoned run could leave for
+          # the next.
+          enable-cache: false
 
       - name: 'Update allow-list pins'
         shell: bash
