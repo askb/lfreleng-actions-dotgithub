@@ -40,6 +40,16 @@
 # that exists. Only allow-list pins are rewritten (--action-calls
 # report), so the override governs nothing else.
 #
+# The linter itself installs from uv.lock, through the 'sweep' group in
+# this repository's pyproject.toml. An unpinned install would let one
+# bad release reach every repository in the sweep at once, and pinning
+# the top-level package alone would leave its dependencies to resolve
+# afresh from the index on every run; the lock fixes the whole tree by
+# hash. Dependabot proposes the bump when the linter releases. A
+# dispatch may name another release in linter-version to try once:
+# that run installs unlocked, by design, since the lock cannot hold a
+# release nobody has adopted yet. The schedule always runs the lock.
+#
 # The schedule sweeps the *-workflows family: those host the reusable
 # build workflows consumers actually run, where a missing endpoint
 # breaks real builds. Standard GitHub plumbing elsewhere in the
@@ -95,7 +105,7 @@ on:
         default: false
       linter-version:
         # yamllint disable-line rule:line-length
-        description: 'gha-workflow-linter release to run, e.g. 1.9.0; blank uses the pinned LINTER_VERSION. For one run only: the schedule always runs the pin'
+        description: 'gha-workflow-linter release to run unlocked, e.g. 1.9.0; blank uses the release uv.lock pins. For one run only: the schedule always runs the lock'
         required: false
         default: ''
 
@@ -118,13 +128,6 @@ env:
   # means a newer release supersedes the proposal in place, and no
   # repository ever carries more than one sweep pull request.
   BRANCH: 'chore/allow-list-bump'
-  # Pinned deliberately. Every action here is pinned to a commit, and an
-  # unpinned install would let one bad release reach every repository in
-  # the sweep at once, raising pull requests from it. Bump when the
-  # linter releases something this sweep needs. A dispatch may override
-  # it for one run through the linter-version input; the schedule
-  # always runs this pin.
-  LINTER_VERSION: '1.8.2'
 
 jobs:
   discover:
@@ -197,16 +200,16 @@ jobs:
         shell: bash
         env:
           OVERRIDE: '${{ inputs.linter-version }}'
-          PINNED: '${{ env.LINTER_VERSION }}'
         run: |
           # Select linter version
-          # A dispatch may name another release to try once, before
-          # anyone moves the pin. The value becomes part of a uvx
-          # requirement specifier, so only a plain version is accepted:
-          # anything else could widen the range or add a source. The
-          # schedule has no inputs and so always runs the pin.
+          # Blank selects uv.lock, the only source the schedule uses. A
+          # dispatch may name another release to try once, before
+          # anyone moves the lock; that run installs unlocked. The value
+          # becomes part of a uvx requirement specifier, so only a plain
+          # version is accepted: anything else could widen the range or
+          # add a source. The output stays blank for a locked run.
           set -euo pipefail
-          version="${PINNED}"
+          version=''
           if [ -n "${OVERRIDE}" ]; then
             if ! [[ "${OVERRIDE}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
               # Escape the value as workflow command data, so a line
@@ -219,10 +222,9 @@ jobs:
               exit 1
             fi
             version="${OVERRIDE}"
-          fi
-          if [ "${version}" != "${PINNED}" ]; then
-            msg="This run uses gha-workflow-linter ${version}, an"
-            echo "::notice::${msg} override of the pinned ${PINNED}"
+            msg="This run installs gha-workflow-linter ${version}"
+            msg="${msg} unlocked, overriding the release uv.lock pins;"
+            echo "::notice::${msg} its dependencies resolve afresh"
           fi
           echo "version=${version}" >> "$GITHUB_OUTPUT"
 
@@ -338,18 +340,40 @@ jobs:
           done < <(printf '%s' "${MATRIX}" \
             | jq -r '.[] | [.repo, .default_branch] | @tsv')
 
+      # The two files that pin the linter, and nothing else. Read-only,
+      # with no credential left in .git/config, and in a directory of
+      # its own beside repos/, so the sweep never reads it.
+      - name: 'Checkout linter lock'
+        # yamllint disable-line rule:line-length
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          path: 'toolchain'
+          persist-credentials: false
+          sparse-checkout: |
+            /pyproject.toml
+            /uv.lock
+          sparse-checkout-cone-mode: false
+
       - name: 'Install uv'
         # yamllint disable-line rule:line-length
         uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884  # v10.3.0
         with:
-          # No cache. The job checks out no repository, so the glob the
-          # action keys its cache on matches nothing and the entry
-          # would never invalidate; every run warned about that. The
-          # one install this job does, the pinned linter and its
-          # dependencies, takes seconds, and a cache that nothing ever
-          # refreshes is one more thing a poisoned run could leave for
-          # the next.
+          # No cache. The one install this job does, the linter and its
+          # dependencies, takes seconds, and a cache entry is one more
+          # thing a poisoned run could leave for the next in a job that
+          # holds the bot's write credential.
           enable-cache: false
+
+      - name: 'Install linter from lock'
+        if: steps.linter.outputs.version == ''
+        shell: bash
+        run: |
+          # Install linter from lock
+          # --locked fails the run when uv.lock is out of step with
+          # pyproject.toml, rather than quietly re-resolving.
+          set -euo pipefail
+          uv sync --project toolchain --locked --only-group sweep
+          uv run --project toolchain --no-sync gha-workflow-linter --version
 
       - name: 'Update allow-list pins'
         shell: bash
@@ -365,11 +389,20 @@ jobs:
           # GraphQL points against a limit of 1000 per hour for each.
           GITHUB_TOKEN: '${{ secrets.GITHUB_TOKEN }}'
           ORG: '${{ needs.discover.outputs.org }}'
-          LINTER_VERSION: '${{ steps.linter.outputs.version }}'
+          OVERRIDE: '${{ steps.linter.outputs.version }}'
           EXPECTED: '${{ needs.discover.outputs.count }}'
         run: |
           # Update allow-list pins
           set -euo pipefail
+
+          # A dispatch override installs unlocked; otherwise the linter
+          # runs from the environment the lock just installed, and
+          # --no-sync keeps uv from touching it.
+          if [ -n "${OVERRIDE}" ]; then
+            linter=(uvx --from "gha-workflow-linter==${OVERRIDE}")
+          else
+            linter=(uv run --project toolchain --no-sync)
+          fi
 
           # One invocation across every checkout, rather than a job per
           # repository. See the note at the top of this file for what
@@ -394,8 +427,7 @@ jobs:
           # signal we want rather than an error, so the status is
           # captured.
           status=0
-          uvx --from "gha-workflow-linter==${LINTER_VERSION}" \
-            gha-workflow-linter lint repos \
+          "${linter[@]}" gha-workflow-linter lint repos \
             --multi-repo \
             --allow-list update \
             --action-calls report \

@@ -22,3 +22,17 @@ updates:
     cooldown:
       default-days: 7
     open-pull-requests-limit: 15
+
+  # pyproject.toml and uv.lock: the gha-workflow-linter release the
+  # allow-list sweep runs (the 'sweep' group) and the agent-script test
+  # tooling (the 'dev' group). No cooldown, unlike the actions above:
+  # the linter is a first-party tool whose releases this organisation
+  # reviews, and the sweep exists to run a new release promptly.
+  - package-ecosystem: 'uv'
+    directory: '/'
+    schedule:
+      interval: 'weekly'
+    commit-message:
+      prefix: 'Build(deps)'
+    cooldown:
+      default-days: 0
