@@ -719,9 +719,11 @@ covers those repositories and no others, inside the family or not.
 Discovery reports every name it cannot read before it fails, so a
 list with two typos needs one corrected re-run. To widen the family
 for one run instead, leave `repo` blank and supply `extra-include`
-globs. The `ALLOW_LIST_BUMP_EXCLUDE` variable removes repositories
-from every run, named or not, and discovery warns about each named
-repository it removes.
+globs. A manual run may also set `linter-version` to try a newer
+linter release on that run alone (see Behaviour). The
+`ALLOW_LIST_BUMP_EXCLUDE` variable removes repositories from every
+run, named or not, and discovery warns about each named repository it
+removes.
 
 #### Behaviour
 
@@ -820,6 +822,16 @@ repository it removes.
   commit-pinned actions around it. An unpinned install would let one bad
   release reach every repository in the sweep at once. Bump it when the
   linter ships something the sweep needs.
+- A `linter-version` dispatch input overrides that pin for one run, so
+  an operator can try a new linter release against the repositories
+  named in `repo` before anyone moves the pin. It accepts a plain
+  release version such as `1.9.0` and fails the job on anything else,
+  since the value becomes part of the install specifier; blank uses
+  the pin, and the log carries a notice whenever an override applies. The schedule
+  always runs the pin. The override is an input rather than a
+  repository variable because a variable would move the one tool pin
+  in this workflow out of git, away from review, CI, diff and blame,
+  and would keep overriding the file until someone removed it.
 
 #### Required configuration
 

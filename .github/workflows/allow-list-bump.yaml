@@ -93,6 +93,11 @@ on:
         required: false
         type: boolean
         default: false
+      linter-version:
+        # yamllint disable-line rule:line-length
+        description: 'gha-workflow-linter release to run, e.g. 1.9.0; blank uses the pinned LINTER_VERSION. For one run only: the schedule always runs the pin'
+        required: false
+        default: ''
 
 permissions: {}
 
@@ -116,7 +121,9 @@ env:
   # Pinned deliberately. Every action here is pinned to a commit, and an
   # unpinned install would let one bad release reach every repository in
   # the sweep at once, raising pull requests from it. Bump when the
-  # linter releases something this sweep needs.
+  # linter releases something this sweep needs. A dispatch may override
+  # it for one run through the linter-version input; the schedule
+  # always runs this pin.
   LINTER_VERSION: '1.8.2'
 
 jobs:
@@ -184,6 +191,40 @@ jobs:
           egress-policy: 'block'
           allowed-endpoints: >
             ${{ env.CONNECTION_ALLOW_LIST }}
+
+      - name: 'Select linter version'
+        id: 'linter'
+        shell: bash
+        env:
+          OVERRIDE: '${{ inputs.linter-version }}'
+          PINNED: '${{ env.LINTER_VERSION }}'
+        run: |
+          # Select linter version
+          # A dispatch may name another release to try once, before
+          # anyone moves the pin. The value becomes part of a uvx
+          # requirement specifier, so only a plain version is accepted:
+          # anything else could widen the range or add a source. The
+          # schedule has no inputs and so always runs the pin.
+          set -euo pipefail
+          version="${PINNED}"
+          if [ -n "${OVERRIDE}" ]; then
+            if ! [[ "${OVERRIDE}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              # Escape the value as workflow command data, so a line
+              # break in it cannot start a command of its own.
+              shown="${OVERRIDE//%/%25}"
+              shown="${shown//$'\r'/%0D}"
+              shown="${shown//$'\n'/%0A}"
+              msg="linter-version '${shown}' is not a plain release"
+              echo "::error::${msg} version such as 1.9.0" >&2
+              exit 1
+            fi
+            version="${OVERRIDE}"
+          fi
+          if [ "${version}" != "${PINNED}" ]; then
+            msg="This run uses gha-workflow-linter ${version}, an"
+            echo "::notice::${msg} override of the pinned ${PINNED}"
+          fi
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
 
       - name: 'Check bot credentials'
         shell: bash
@@ -324,7 +365,7 @@ jobs:
           # GraphQL points against a limit of 1000 per hour for each.
           GITHUB_TOKEN: '${{ secrets.GITHUB_TOKEN }}'
           ORG: '${{ needs.discover.outputs.org }}'
-          LINTER_VERSION: '${{ env.LINTER_VERSION }}'
+          LINTER_VERSION: '${{ steps.linter.outputs.version }}'
           EXPECTED: '${{ needs.discover.outputs.count }}'
         run: |
           # Update allow-list pins
