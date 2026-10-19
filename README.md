@@ -827,9 +827,10 @@ removes.
   bad release reach every repository in the sweep at once, and pinning
   the top-level package alone would leave its dependencies to resolve
   afresh on every run; the lock fixes the whole tree by hash.
-  Dependabot proposes the bump when the linter releases, with no
-  cooldown, since this organisation reviews the linter's releases and
-  the sweep exists to run a new release the week it ships.
+  Dependabot proposes the bump when the linter releases. The other
+  dependencies keep the seven-day cooldown; the linter sits outside it,
+  since this organisation reviews its releases and the sweep exists to
+  run a new release the week it ships.
 - A `linter-version` dispatch input overrides the lock for one run, so
   an operator can try a new linter release against the repositories
   named in `repo` before anyone moves the lock. That run installs the
