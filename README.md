@@ -654,6 +654,15 @@ two scanners can diverge at run time without editing the shared JSON.
 The workflow merges the variable patterns with the organisation's JSON
 lists before matching.
 
+A caller with a standing scope of its own passes it as
+`default-include`: the same glob syntax, which discovery applies when
+the run names no repository and drops when it names one, so a named
+repository outside that scope is still swept. The allow-list bump
+sweep uses it for the `*-workflows` family. Discovery makes the
+decision after splitting the names, so input consisting of separators
+counts as naming nothing and keeps the default, rather than lifting it
+and widening the run to the whole organisation.
+
 ### Allow-list bump sweep
 
 The workflow-repo family pins the `step-security/harden-runner` egress
@@ -693,16 +702,26 @@ allow-list host rather than one per repository.
 
 #### Scope
 
-The sweep covers the **`*-workflows` family**, and nothing else. Those
-repositories host the reusable build workflows consumers run, where a
-missing endpoint breaks real builds in downstream projects. Standard
-GitHub plumbing elsewhere in the organisation touches a small, stable
-endpoint set, so a pin some versions behind has little practical effect,
-and weekly pull requests against it would create review noise.
+The scheduled sweep covers the **`*-workflows` family**, and nothing
+else. Those repositories host the reusable build workflows consumers
+run, where a missing endpoint breaks real builds in downstream
+projects. Standard GitHub plumbing elsewhere in the organisation
+touches a small, stable endpoint set, so a pin some versions behind has
+little practical effect, and weekly pull requests against it would
+create review noise.
 
-To sweep something else, run the workflow manually and supply an
-`extra-include` glob. The `ALLOW_LIST_BUMP_EXCLUDE` variable removes
-repositories from every run.
+A manual run serves the other case: selective updates to repositories
+an operator names. The `repo` input takes repository names (commas,
+spaces or newlines; the
+[list-splitter-action](https://github.com/lfreleng-actions/list-splitter-action)
+in discovery validates and deduplicates them), and the sweep then
+covers those repositories and no others, inside the family or not.
+Discovery reports every name it cannot read before it fails, so a
+list with two typos needs one corrected re-run. To widen the family
+for one run instead, leave `repo` blank and supply `extra-include`
+globs. The `ALLOW_LIST_BUMP_EXCLUDE` variable removes repositories
+from every run, named or not, and discovery warns about each named
+repository it removes.
 
 #### Behaviour
 

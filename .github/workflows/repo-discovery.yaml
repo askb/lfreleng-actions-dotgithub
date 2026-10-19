@@ -34,6 +34,12 @@ on:
         required: false
         type: 'string'
         default: ''
+      default-include:
+        # yamllint disable-line rule:line-length
+        description: 'Include globs applied only when only-repo names nothing (comma, space, or newline separated)'
+        required: false
+        type: 'string'
+        default: ''
       extra-exclude:
         # yamllint disable-line rule:line-length
         description: 'Extra exclude globs (comma, space, or newline separated)'
@@ -124,6 +130,13 @@ jobs:
         with:
           list: '${{ inputs.extra-include }}'
 
+      - name: 'Split default include globs'
+        id: 'default-include'
+        # yamllint disable-line rule:line-length
+        uses: lfreleng-actions/list-splitter-action@b56a625474875d05ca8d1c1eb3314c29c526c9a6  # v0.1.0
+        with:
+          list: '${{ inputs.default-include }}'
+
       - name: 'Split extra exclude globs'
         id: 'extra-exclude'
         # yamllint disable-line rule:line-length
@@ -139,6 +152,7 @@ jobs:
           ORG: '${{ inputs.org }}'
           ONLY_REPO: '${{ steps.only-repo.outputs.lines }}'
           EXTRA_INCLUDE: '${{ steps.extra-include.outputs.lines }}'
+          DEFAULT_INCLUDE: '${{ steps.default-include.outputs.lines }}'
           EXTRA_EXCLUDE: '${{ steps.extra-exclude.outputs.lines }}'
         run: |
           # Build in-scope repository matrix
@@ -192,11 +206,21 @@ jobs:
           # an empty array, not one holding a blank item.
           mapfile -t inc_var < <(printf '%s' "${EXTRA_INCLUDE}")
           mapfile -t exc_var < <(printf '%s' "${EXTRA_EXCLUDE}")
+          mapfile -t def_var < <(printf '%s' "${DEFAULT_INCLUDE}")
           includes=("${inc_json[@]}" "${inc_var[@]}")
           excludes=("${exc_json[@]}" "${exc_var[@]}")
           # Named repositories for a manual run, already validated and
           # deduplicated by the split step.
           mapfile -t only_repos < <(printf '%s' "${ONLY_REPO}")
+          # The default include is a caller's standing scope, applied
+          # only when no repository is named, so that naming one
+          # outside it works. Decided here, after the split, rather
+          # than in the caller: an expression there sees input holding
+          # only separators as a name, drops the default, and the run
+          # then covers every repository in the organisation.
+          if [ "${#only_repos[@]}" -eq 0 ]; then
+            includes+=("${def_var[@]}")
+          fi
 
           # Case-insensitive glob match of a name against any pattern.
           shopt -s nocasematch

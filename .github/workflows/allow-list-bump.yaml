@@ -40,13 +40,15 @@
 # that exists. Only allow-list pins are rewritten (--action-calls
 # report), so the override governs nothing else.
 #
-# Scope is the *-workflows family: those host the reusable build
-# workflows consumers actually run, where a missing endpoint breaks real
-# builds. Standard GitHub plumbing elsewhere in the organisation touches
-# a small, stable endpoint set, so a pin several versions behind has
-# little practical effect and weekly pull requests against it would be
-# review noise. Run this manually with an extra-include to sweep
-# something else.
+# The schedule sweeps the *-workflows family: those host the reusable
+# build workflows consumers actually run, where a missing endpoint
+# breaks real builds. Standard GitHub plumbing elsewhere in the
+# organisation touches a small, stable endpoint set, so a pin several
+# versions behind has little practical effect and weekly pull requests
+# against it would be review noise. A manual run serves the other
+# case: name repositories in 'repo' and the sweep covers those and no
+# others, inside the family or not, or give 'extra-include' globs to
+# widen the family for one run.
 #
 # Two properties of the pull requests it raises are deliberate:
 #
@@ -77,12 +79,12 @@ on:
         default: ''
       repo:
         # yamllint disable-line rule:line-length
-        description: 'Sweep only these repositories (names only, comma or space separated) if in scope; blank sweeps all'
+        description: 'Sweep these repositories and no others (names only; commas, spaces or newlines); blank sweeps the *-workflows family'
         required: false
         default: ''
       extra-include:
         # yamllint disable-line rule:line-length
-        description: 'Additional include globs beyond *-workflows (comma separated)'
+        description: 'Include globs added to *-workflows, or applied alone when repo names repositories (commas, spaces or newlines)'
         required: false
         default: ''
       dry-run:
@@ -128,8 +130,19 @@ jobs:
     with:
       org: '${{ inputs.org || github.repository_owner }}'
       only-repo: '${{ inputs.repo }}'
-      # The critical tier. A dispatch run may widen it.
-      extra-include: '*-workflows,${{ inputs.extra-include }}'
+      # The schedule, and a dispatch naming no repository, sweep the
+      # critical tier, widened by any extra include. A dispatch that
+      # names repositories sweeps those and no others: discovery
+      # drops the default include once the names are split, so a
+      # repository outside the family can be named on its own, and
+      # only an include the operator supplies narrows the named set.
+      # Discovery makes that decision rather than an expression here,
+      # which would read a value holding only separators as a name,
+      # drop the family, and sweep the whole organisation. The exclude
+      # list still applies to every run, and discovery warns about
+      # each named repository it removes.
+      default-include: '*-workflows'
+      extra-include: '${{ inputs.extra-include }}'
       extra-exclude: '${{ vars.ALLOW_LIST_BUMP_EXCLUDE }}'
     secrets:
       # Listing an organisation's *public* repositories needs no
