@@ -654,6 +654,15 @@ two scanners can diverge at run time without editing the shared JSON.
 The workflow merges the variable patterns with the organisation's JSON
 lists before matching.
 
+A caller with a standing scope of its own passes it as
+`default-include`: the same glob syntax, which discovery applies when
+the run names no repository and drops when it names one, so a named
+repository outside that scope is still swept. The allow-list bump
+sweep uses it for the `*-workflows` family. Discovery makes the
+decision after splitting the names, so input consisting of separators
+counts as naming nothing and keeps the default, rather than lifting it
+and widening the run to the whole organisation.
+
 ### Allow-list bump sweep
 
 The workflow-repo family pins the `step-security/harden-runner` egress
@@ -678,46 +687,62 @@ to the allow-list weeks earlier.
 
 Every Monday, `allow-list-bump.yaml` enumerates the in-scope
 repositories, clones them side by side, runs [`gha-workflow-linter`][linter]
-once across the whole set with `--multi-repo --update-allow-list`, and
+once across the whole set with `--multi-repo --allow-list update`, and
 opens a pull request wherever a pin moved. A Slack digest links every
 pull request.
 
 One sweep rather than a job per repository: a single hardened runner,
 one toolchain install and one linter process cover the whole family,
 and the job that produces the digest also sends it, rather than
-passing it between jobs as artefacts. A multi-repository run does
-share one resolution cache, but that is not what earns the
-arrangement here: every repository in scope sets a Dependabot
-cooldown, and the linter bypasses that cache whenever a cooldown
-applies, so each repository still resolves the allow-list host for
-itself.
+passing it between jobs as artefacts. A multi-repository run also
+shares one resolution cache, so the family costs one lookup of the
+allow-list host rather than one per repository.
 
 [linter]: https://github.com/lfreleng-actions/gha-workflow-linter
 
 #### Scope
 
-The sweep covers the **`*-workflows` family**, and nothing else. Those
-repositories host the reusable build workflows consumers run, where a
-missing endpoint breaks real builds in downstream projects. Standard
-GitHub plumbing elsewhere in the organisation touches a small, stable
-endpoint set, so a pin some versions behind has little practical effect,
-and weekly pull requests against it would create review noise.
+The scheduled sweep covers the **`*-workflows` family**, and nothing
+else. Those repositories host the reusable build workflows consumers
+run, where a missing endpoint breaks real builds in downstream
+projects. Standard GitHub plumbing elsewhere in the organisation
+touches a small, stable endpoint set, so a pin some versions behind has
+little practical effect, and weekly pull requests against it would
+create review noise.
 
-To sweep something else, run the workflow manually and supply an
-`extra-include` glob. The `ALLOW_LIST_BUMP_EXCLUDE` variable removes
-repositories from every run.
+A manual run serves the other case: selective updates to repositories
+an operator names. The `repo` input takes repository names (commas,
+spaces or newlines; the
+[list-splitter-action](https://github.com/lfreleng-actions/list-splitter-action)
+in discovery validates and deduplicates them), and the sweep then
+covers those repositories and no others, inside the family or not.
+Discovery reports every name it cannot read before it fails, so a
+list with two typos needs one corrected re-run. To widen the family
+for one run instead, leave `repo` blank and supply `extra-include`
+globs. The `ALLOW_LIST_BUMP_EXCLUDE` variable removes repositories
+from every run, named or not, and discovery warns about each named
+repository it removes.
 
 #### Behaviour
 
-- Runs with `--no-auto-fix`, so each pull request carries a diff
-  confined to allow-list pins. Action version bumps belong to Dependabot, and
-  mixing them makes the change harder to review and harder to revert.
+- Runs with `--action-calls report`, so each pull request carries a
+  diff confined to allow-list pins. Action version bumps belong to
+  Dependabot, and mixing them makes the change harder to review and
+  harder to revert.
 - The pinned reference and its version comment change, and nothing
-  else: quoting style, spacing and comment position all survive. The
-  release the sweep moves to is the newest one eligible under the
-  repository's own Dependabot cooldown, which is not always the newest
-  released, and the pull request says so rather than calling it
-  current.
+  else: quoting style, spacing and comment position all survive.
+- Every pin moves to the newest release of its host, with no cooldown.
+  Each repository in the family sets a seven-day Dependabot cooldown
+  for its action calls, and the linter would apply it to these pins
+  too, so the sweep passes `--cooldown 0`. The allow-list grows far
+  more often than it shrinks, an addition grants an endpoint and takes
+  nothing away, and each change passes review and the block-mode
+  probe in this repository before anyone tags it, so holding a release
+  back for a week serves nothing and delays the fix for a broken
+  build. The sweep rewrites allow-list pins and nothing else, so the
+  override governs nothing else. Dropping the cooldown also lets the
+  linter keep its resolution cache across the sweep, which a cooldown
+  made it bypass.
 - The sweep leaves alone any pin carrying an `allow-list-pin-ok`
   directive.
 - Each repository carries at most one sweep pull request, on a fixed
@@ -787,7 +812,10 @@ repositories from every run.
   carries a `required_signatures` rule, which an unverified commit
   would fail.
 - A `dry-run` dispatch input reports what would change without opening
-  anything.
+  anything. It needs no bot credential: the credential check warns
+  about a missing one instead of failing the run, the sweep mints no
+  token, and the reads the step still makes go through the ephemeral
+  token.
 - The workflow pins the linter version in `LINTER_VERSION`, matching the
   commit-pinned actions around it. An unpinned install would let one bad
   release reach every repository in the sweep at once. Bump it when the

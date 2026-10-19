@@ -17,29 +17,38 @@
 #
 # Every Monday this enumerates the in-scope repositories, clones them
 # side by side, runs gha-workflow-linter once across the whole set with
-# --multi-repo --update-allow-list, and opens a pull request wherever a
+# --multi-repo --allow-list update, and opens a pull request wherever a
 # pin moved. A Slack digest links every pull request; a separate job
 # reports a failed run.
 #
 # One sweep rather than a job per repository: a single hardened runner,
 # one toolchain install and one linter process cover the whole family,
 # and the Slack digest is assembled in the job that produced it rather
-# than passed between matrix jobs as artefacts.
+# than passed between matrix jobs as artefacts. A multi-repository run
+# also shares one resolution cache, so the family costs one lookup of
+# the allow-list host rather than one per repository.
 #
-# Not, however, for the reason a reader might expect. A multi-repository
-# run does share one resolution cache, but every repository in scope
-# sets a Dependabot cooldown, and the linter bypasses that cache
-# whenever a cooldown applies, since a cached answer would then depend
-# on a policy the cache does not record. Each repository still resolves
-# the allow-list host for itself.
+# No cooldown applies to these pins. Every repository in scope sets a
+# seven-day Dependabot cooldown, which the linter would otherwise
+# honour, and the pins would then lag the newest release by up to a
+# week. The allow-list is different from an action: it mostly grows,
+# an addition grants an endpoint and takes nothing away, and every
+# change is reviewed and probed under block mode in the .github
+# repository before it is tagged. Holding a release back serves
+# nothing here, and has held back the fix for a broken build. The
+# sweep passes --cooldown 0, so each run targets the newest release
+# that exists. Only allow-list pins are rewritten (--action-calls
+# report), so the override governs nothing else.
 #
-# Scope is the *-workflows family: those host the reusable build
-# workflows consumers actually run, where a missing endpoint breaks real
-# builds. Standard GitHub plumbing elsewhere in the organisation touches
-# a small, stable endpoint set, so a pin several versions behind has
-# little practical effect and weekly pull requests against it would be
-# review noise. Run this manually with an extra-include to sweep
-# something else.
+# The schedule sweeps the *-workflows family: those host the reusable
+# build workflows consumers actually run, where a missing endpoint
+# breaks real builds. Standard GitHub plumbing elsewhere in the
+# organisation touches a small, stable endpoint set, so a pin several
+# versions behind has little practical effect and weekly pull requests
+# against it would be review noise. A manual run serves the other
+# case: name repositories in 'repo' and the sweep covers those and no
+# others, inside the family or not, or give 'extra-include' globs to
+# widen the family for one run.
 #
 # Two properties of the pull requests it raises are deliberate:
 #
@@ -70,16 +79,17 @@ on:
         default: ''
       repo:
         # yamllint disable-line rule:line-length
-        description: 'Sweep only these repositories (names only, comma or space separated) if in scope; blank sweeps all'
+        description: 'Sweep these repositories and no others (names only; commas, spaces or newlines); blank sweeps the *-workflows family'
         required: false
         default: ''
       extra-include:
         # yamllint disable-line rule:line-length
-        description: 'Additional include globs beyond *-workflows (comma separated)'
+        description: 'Include globs added to *-workflows, or applied alone when repo names repositories (commas, spaces or newlines)'
         required: false
         default: ''
       dry-run:
-        description: 'Report what would change without opening pull requests'
+        # yamllint disable-line rule:line-length
+        description: 'Report what would change without opening pull requests; needs no bot credential'
         required: false
         type: boolean
         default: false
@@ -107,7 +117,7 @@ env:
   # unpinned install would let one bad release reach every repository in
   # the sweep at once, raising pull requests from it. Bump when the
   # linter releases something this sweep needs.
-  LINTER_VERSION: '1.5.1'
+  LINTER_VERSION: '1.8.2'
 
 jobs:
   discover:
@@ -120,8 +130,19 @@ jobs:
     with:
       org: '${{ inputs.org || github.repository_owner }}'
       only-repo: '${{ inputs.repo }}'
-      # The critical tier. A dispatch run may widen it.
-      extra-include: '*-workflows,${{ inputs.extra-include }}'
+      # The schedule, and a dispatch naming no repository, sweep the
+      # critical tier, widened by any extra include. A dispatch that
+      # names repositories sweeps those and no others: discovery
+      # drops the default include once the names are split, so a
+      # repository outside the family can be named on its own, and
+      # only an include the operator supplies narrows the named set.
+      # Discovery makes that decision rather than an expression here,
+      # which would read a value holding only separators as a name,
+      # drop the family, and sweep the whole organisation. The exclude
+      # list still applies to every run, and discovery warns about
+      # each named repository it removes.
+      default-include: '*-workflows'
+      extra-include: '${{ inputs.extra-include }}'
       extra-exclude: '${{ vars.ALLOW_LIST_BUMP_EXCLUDE }}'
     secrets:
       # Listing an organisation's *public* repositories needs no
@@ -170,11 +191,17 @@ jobs:
           CLIENT_ID: '${{ vars.LF_RELENG_BOT_CLIENT_ID }}'
           # yamllint disable-line rule:line-length
           KEY_PRESENT: "${{ secrets.LF_RELENG_BOT_PRIVATE_KEY != '' }}"
+          DRY_RUN: '${{ inputs.dry-run }}'
         run: |
           # Check bot credentials
           # Name the missing piece. The previous incarnation of this
           # sweep failed every week on an unprovisioned credential, and
           # said only that a token was unavailable several steps later.
+          #
+          # A dry run writes nothing and so needs no credential: it
+          # still names the gap, so an operator rehearsing the sweep
+          # learns the live run would stop here, but it carries on and
+          # exercises the clone, the linter and the digest regardless.
           set -euo pipefail
           missing=''
           if [ -z "${CLIENT_ID}" ]; then
@@ -188,8 +215,12 @@ jobs:
             msg="The allow-list sweep needs the LF RelEng bot App"
             msg="${msg} credentials: ${missing} is not set for the"
             msg="${msg} 'production' environment"
-            echo "::error::${msg}" >&2
-            exit 1
+            if [ "${DRY_RUN}" = 'true' ]; then
+              echo "::warning::${msg}; a dry run proceeds without them"
+            else
+              echo "::error::${msg}" >&2
+              exit 1
+            fi
           fi
 
       # Pull requests come from the organisation's bot so that a
@@ -198,6 +229,7 @@ jobs:
       # ephemeral GITHUB_TOKEN deliberately suppresses.
       - name: 'Mint bot token'
         id: 'token'
+        if: "!inputs.dry-run"
         # yamllint disable-line rule:line-length
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
         with:
@@ -219,6 +251,7 @@ jobs:
 
       - name: 'Resolve bot identity'
         id: 'identity'
+        if: "!inputs.dry-run"
         shell: bash
         env:
           # A public user lookup, so the ephemeral token serves. Keeping
@@ -268,7 +301,14 @@ jobs:
         # yamllint disable-line rule:line-length
         uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884  # v10.3.0
         with:
-          enable-cache: true
+          # No cache. The job checks out no repository, so the glob the
+          # action keys its cache on matches nothing and the entry
+          # would never invalidate; every run warned about that. The
+          # one install this job does, the pinned linter and its
+          # dependencies, takes seconds, and a cache that nothing ever
+          # refreshes is one more thing a poisoned run could leave for
+          # the next.
+          enable-cache: false
 
       - name: 'Update allow-list pins'
         shell: bash
@@ -294,9 +334,20 @@ jobs:
           # repository. See the note at the top of this file for what
           # that does and does not save.
           #
-          # --no-auto-fix keeps the diff to allow-list pins alone: action
-          # version bumps are Dependabot's job, and mixing them makes the
-          # pull request harder to review and harder to revert.
+          # --action-calls report keeps the diff to allow-list pins
+          # alone: action version bumps are Dependabot's job, and mixing
+          # them makes the pull request harder to review and harder to
+          # revert.
+          #
+          # --cooldown 0 targets the newest release regardless of each
+          # repository's Dependabot cooldown; the note at the top of
+          # this file says why. It also keeps the linter's resolution
+          # cache in play, which a cooldown would bypass.
+          #
+          # The document goes to a file rather than standard output, so
+          # the job log keeps the linter's readable account of each
+          # repository. The file lands beside the checkouts, not among
+          # them: the linter refuses to write inside the tree it reads.
           #
           # The linter exits 1 when it modifies files, which is the
           # signal we want rather than an error, so the status is
@@ -305,21 +356,23 @@ jobs:
           uvx --from "gha-workflow-linter==${LINTER_VERSION}" \
             gha-workflow-linter lint repos \
             --multi-repo \
-            --update-allow-list \
-            --no-auto-fix \
+            --allow-list update \
+            --action-calls report \
+            --cooldown 0 \
             --allow-list-org "${ORG}" \
-            --format json > report.json || status=$?
+            --json-output report.json || status=$?
           echo "Linter exited ${status}"
 
-          # The exit code cannot gate this step. --update-allow-list
+          # The exit code cannot gate this step. --allow-list update
           # makes an unresolved host exit 4, and the sweep's aggregate
           # code is the highest across every repository, so one host
           # that would not resolve would discard the fixes made for all
           # the others before any pull request was raised. The report is
           # the contract instead: insist it is well formed, act on what
           # succeeded, and fail once the rest is open. A run that died
-          # outright writes no parseable document, which the check below
-          # catches.
+          # outright writes no document at all, since the linter writes
+          # it once, after it has finished reading, which the check
+          # below catches.
 
           # Insist the report accounts for everything discovery found.
           # A rate-limited pre-flight can end the run before any document
@@ -364,7 +417,12 @@ jobs:
         id: 'sweep'
         shell: bash
         env:
-          GH_TOKEN: '${{ steps.token.outputs.token }}'
+          # A dry run mints no bot token and only reads: open pull
+          # requests, branch tips and changed files, all on public
+          # repositories, which the ephemeral token can see. Every write
+          # below is guarded by DRY_RUN, so the fallback never reaches
+          # one.
+          GH_TOKEN: '${{ steps.token.outputs.token || secrets.GITHUB_TOKEN }}'
           ORG: '${{ needs.discover.outputs.org }}'
           BRANCH: '${{ env.BRANCH }}'
           AUTHOR: '${{ steps.identity.outputs.author }}'
@@ -490,9 +548,8 @@ jobs:
               title="Chore: Bump harden-runner allow-list to ${version}"
               display="${version}"
               commit_origin="${host}"
-              body_target="to **${version}** of \`${host}\`, the newest"
-              body_target="${body_target} release eligible under this"
-              body_target="${body_target} repository's Dependabot cooldown"
+              body_target="to **${version}** of \`${host}\`, its newest"
+              body_target="${body_target} release"
             else
               title='Chore: Bump harden-runner allow-list pins'
               display=''
@@ -501,9 +558,7 @@ jobs:
               if [ "${hosts_count}" -gt 1 ]; then
                 display="${hosts_count} hosts"
                 commit_origin="${commit_origin} (${pairs})"
-                body_target="${body_target} that is eligible under this"
-                body_target="${body_target} repository's Dependabot"
-                body_target="${body_target} cooldown: ${pairs}"
+                body_target="${body_target}: ${pairs}"
                 echo "::warning::${repo} pins ${hosts_count} allow-list" \
                   "hosts (${pairs}); the pull request describes them all"
               fi
@@ -795,31 +850,61 @@ jobs:
               # threads and approvals with it. Staging satisfies both --
               # the proposal branch moves straight from its old commit
               # to the new one, and is equal to the base at no point.
-              additions="$(printf '%s\n' "${changed}" \
-                | while IFS= read -r file; do
-                    [ -z "${file}" ] && continue
-                    jq -n --arg path "${file}" \
-                      --arg contents "$(base64 -w0 < "${dir}/${file}")" \
-                      '{path: $path, contents: $contents}'
-                  done | jq -s -c '.')"
-
-              set_ref "${ORG}/${repo}" "${staging}" "${base}"
-              commit="$(jq -n \
+              #
+              # File contents travel through files, never through the
+              # command line. Linux caps a single argument at 128 KiB,
+              # and a reusable workflow in this family runs to 134 KiB
+              # once base64-encoded, so an --arg carrying it fails with
+              # "Argument list too long" before jq starts; the whole
+              # payload for one repository reaches 350 KiB. The first
+              # live run died here on its first repository and raised
+              # nothing. --rawfile and --slurpfile read from disk, and
+              # gh reads the request body from standard input, so no
+              # size reaches an argument. The payload is also built in
+              # full before the staging ref exists: a failure here then
+              # leaves nothing behind in the repository.
+              payload="$(mktemp -d)"
+              : > "${payload}/additions.ndjson"
+              while IFS= read -r file; do
+                [ -z "${file}" ] && continue
+                base64 -w0 < "${dir}/${file}" > "${payload}/contents"
+                jq -n --arg path "${file}" \
+                  --rawfile contents "${payload}/contents" \
+                  '{path: $path, contents: $contents}' \
+                  >> "${payload}/additions.ndjson"
+              done <<< "${changed}"
+              jq -s -c '.' "${payload}/additions.ndjson" \
+                > "${payload}/additions.json"
+              jq -n \
                 --arg query "${mutation}" \
                 --arg slug "${ORG}/${repo}" \
                 --arg branch "${staging}" \
                 --arg oid "${base}" \
                 --arg headline "${title}" \
                 --arg body "${message}" \
-                --argjson additions "${additions}" \
+                --slurpfile additions "${payload}/additions.json" \
                 '{query: $query, variables: {input: {
                    branch: {repositoryNameWithOwner: $slug,
                             branchName: $branch},
                    expectedHeadOid: $oid,
                    message: {headline: $headline, body: $body},
-                   fileChanges: {additions: $additions}}}}' \
-                | gh api graphql --input - \
-                --jq '.data.createCommitOnBranch.commit.oid')"
+                   fileChanges: {additions: $additions[0]}}}}' \
+                > "${payload}/request.json"
+
+              set_ref "${ORG}/${repo}" "${staging}" "${base}"
+              # A refused mutation must not strand the staging ref, so
+              # the failure is caught, the ref removed, and the run then
+              # fails with the repository named.
+              if ! commit="$(gh api graphql \
+                  --input "${payload}/request.json" \
+                  --jq '.data.createCommitOnBranch.commit.oid')"; then
+                gh api -X DELETE \
+                  "repos/${ORG}/${repo}/git/refs/heads/${staging}" \
+                  > /dev/null || true
+                echo "::error::${repo}: creating the commit failed" >&2
+                exit 1
+              fi
+              rm -rf "${payload}"
               # The tip was read before the linter comparison and the
               # staging commit, so a handful of API calls have passed.
               # Confirm it has not moved before pointing the proposal at
