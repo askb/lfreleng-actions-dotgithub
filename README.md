@@ -818,20 +818,31 @@ removes.
   about a missing one instead of failing the run, the sweep mints no
   token, and the reads the step still makes go through the ephemeral
   token.
-- The workflow pins the linter version in `LINTER_VERSION`, matching the
-  commit-pinned actions around it. An unpinned install would let one bad
-  release reach every repository in the sweep at once. Bump it when the
-  linter ships something the sweep needs.
-- A `linter-version` dispatch input overrides that pin for one run, so
+- The linter installs from `uv.lock`, through the `sweep` dependency
+  group in this repository's `pyproject.toml`, matching the
+  commit-pinned actions around it. The job checks out those two files
+  and nothing else, without credentials, and installs with
+  `uv sync --locked`, so a lock out of step with `pyproject.toml` fails
+  the run rather than re-resolving. An unpinned install would let one
+  bad release reach every repository in the sweep at once, and pinning
+  the top-level package alone would leave its dependencies to resolve
+  afresh on every run; the lock fixes the whole tree by hash.
+  Dependabot proposes the bump when the linter releases, with no
+  cooldown, since this organisation reviews the linter's releases and
+  the sweep exists to run a new release the week it ships.
+- A `linter-version` dispatch input overrides the lock for one run, so
   an operator can try a new linter release against the repositories
-  named in `repo` before anyone moves the pin. It accepts a plain
-  release version such as `1.9.0` and fails the job on anything else,
-  since the value becomes part of the install specifier; blank uses
-  the pin, and the log carries a notice whenever an override applies. The schedule
-  always runs the pin. The override is an input rather than a
-  repository variable because a variable would move the one tool pin
-  in this workflow out of git, away from review, CI, diff and blame,
-  and would keep overriding the file until someone removed it.
+  named in `repo` before anyone moves the lock. That run installs the
+  release unlocked by design, with its dependencies resolved afresh,
+  since the lock cannot hold a release nobody has adopted yet. It
+  accepts a plain release version such as `1.9.0` and fails the job
+  on anything else, since the value becomes part of the install
+  specifier; blank uses the lock, and the log carries a notice
+  whenever an override applies. The schedule always runs the lock.
+  The override is an input rather than a repository variable because a
+  variable would move the one tool pin in this workflow out of git,
+  away from review, CI, diff and blame, and would keep overriding the
+  lock until someone removed it.
 
 #### Required configuration
 
