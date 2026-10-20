@@ -63,6 +63,7 @@ with signed tags and provenance attestations.
 | [draft-release-promote-action]   | Promote a draft GitHub release to a full release            |
 | [release-assets-action]          | Upload build artefacts and assets to a GitHub release       |
 | [nexus-publish-action]           | Publish content to Sonatype Nexus Repository servers        |
+| [log-publish-action]             | Publish build logs and test reports to an S3 log server     |
 | [nexus-docker-login-action]      | Docker login for all registries in Nexus3 and DockerHub     |
 | [docker-release-detect-action]   | Parse merged container release files into a promotion plan  |
 | [docker-promote-action]          | Copy staged Docker images to release tags without a rebuild |
@@ -170,6 +171,7 @@ with signed tags and provenance attestations.
 | [standalone-linting-action]        | Run linting tools that do not run under pre-commit.ci               |
 | [gha-workflow-linter]              | Lint and verify GitHub workflow/action calls                        |
 | [change-isolation-action]          | Verify a change isolates edits to gitignore-style path patterns     |
+| [dependency-change-action]         | Detect whether a change touched dependency manifests                |
 | [aislop-scan-action]               | Scan a repository with the aislop AI-slop/code-quality scanner      |
 | [rtd-config-audit-action]          | Audit and verify Read the Docs configuration files                  |
 | [info-yaml-validate-action]        | Validate INFO.yaml files and verify the repositories they declare   |
@@ -189,6 +191,7 @@ with signed tags and provenance attestations.
 | [file-grep-regex-action]       | Extract a string from a file using grep and a regular expression   |
 | [file-sed-regex-action]        | Perform string substitutions in a file using sed                   |
 | [json-key-value-lookup-action] | Look up a value in a JSON key/value table                          |
+| [list-splitter-action]         | Split a delimited list into validated JSON and CSV outputs         |
 | [vars-to-env-action]           | Export GitHub variables or secrets as job environment variables    |
 | [url-download-action]          | Download content from a URL using wget                             |
 | [url-validity-action]          | Check a URL for a valid server response                            |
@@ -446,6 +449,7 @@ to all repositories unless otherwise stated.
 [draft-release-promote-action]: https://github.com/lfreleng-actions/draft-release-promote-action
 [release-assets-action]: https://github.com/lfreleng-actions/release-assets-action
 [nexus-publish-action]: https://github.com/lfreleng-actions/nexus-publish-action
+[log-publish-action]: https://github.com/lfreleng-actions/log-publish-action
 [nexus-docker-login-action]: https://github.com/lfreleng-actions/nexus-docker-login-action
 [docker-release-detect-action]: https://github.com/lfreleng-actions/docker-release-detect-action
 [docker-promote-action]: https://github.com/lfreleng-actions/docker-promote-action
@@ -511,6 +515,7 @@ to all repositories unless otherwise stated.
 [standalone-linting-action]: https://github.com/lfreleng-actions/standalone-linting-action
 [gha-workflow-linter]: https://github.com/lfreleng-actions/gha-workflow-linter
 [change-isolation-action]: https://github.com/lfreleng-actions/change-isolation-action
+[dependency-change-action]: https://github.com/lfreleng-actions/dependency-change-action
 [aislop-scan-action]: https://github.com/lfreleng-actions/aislop-scan-action
 [rtd-config-audit-action]: https://github.com/lfreleng-actions/rtd-config-audit-action
 [info-yaml-validate-action]: https://github.com/lfreleng-actions/info-yaml-validate-action
@@ -523,6 +528,7 @@ to all repositories unless otherwise stated.
 [file-grep-regex-action]: https://github.com/lfreleng-actions/file-grep-regex-action
 [file-sed-regex-action]: https://github.com/lfreleng-actions/file-sed-regex-action
 [json-key-value-lookup-action]: https://github.com/lfreleng-actions/json-key-value-lookup-action
+[list-splitter-action]: https://github.com/lfreleng-actions/list-splitter-action
 [vars-to-env-action]: https://github.com/lfreleng-actions/vars-to-env-action
 [url-download-action]: https://github.com/lfreleng-actions/url-download-action
 [url-validity-action]: https://github.com/lfreleng-actions/url-validity-action
