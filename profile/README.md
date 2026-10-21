@@ -309,6 +309,7 @@ verify the actions and workflows in this organisation:
 | [markdown-table-fixer] | Fix markdown table formatting as a CLI tool or pre-commit hook   |
 | [pull-request-fixer]   | Fix pull request titles, bodies, and files across a GitHub org   |
 | [python-nss-ng]        | Python bindings for Network Security Services (NSS) and NSPR     |
+| [shell-scripts]        | Bash and zsh tools for maintaining lfreleng-actions repositories |
 
 <!-- markdownlint-enable MD013 -->
 
@@ -593,6 +594,7 @@ to all repositories unless otherwise stated.
 [markdown-table-fixer]: https://github.com/lfreleng-actions/markdown-table-fixer
 [pull-request-fixer]: https://github.com/lfreleng-actions/pull-request-fixer
 [python-nss-ng]: https://github.com/lfreleng-actions/python-nss-ng
+[shell-scripts]: https://github.com/lfreleng-actions/shell-scripts
 
 <!-- Building GitHub Workflows -->
 [gerrit-to-platform-docs]: https://github.com/lfit/releng-gerrit_to_platform
