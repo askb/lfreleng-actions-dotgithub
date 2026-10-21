@@ -1,0 +1,3 @@
+{
+  "exclude_bots": ["lf-releng-code-monkey-bot"]
+}
